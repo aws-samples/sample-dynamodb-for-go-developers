@@ -1,8 +1,6 @@
-# DynamoDB for Go Developers — Complete Solution
+# DynamoDB for Go Developers 
 
 This is the complete, runnable reference solution for the **LGOD: DynamoDB for Go Developers** workshop. It demonstrates every DynamoDB access pattern the workshop teaches, using the AWS SDK for Go v2.
-
-This code is supplementary material. In the workshop, you build these files step by step; here they are provided complete so you can run the finished application, compare against your own work, or use it as a reference.
 
 ## What it demonstrates
 
