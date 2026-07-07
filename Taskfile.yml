@@ -1,0 +1,78 @@
+version: "3"
+
+# Task runner for the DynamoDB for Go Developers solution.
+# Install go-task: https://taskfile.dev/installation/
+#
+# Go module settings (GOPROXY=direct, GOSUMDB=off) are loaded from .env.
+
+dotenv: [".env"]
+
+env:
+  AWS_REGION: '{{.AWS_REGION | default "us-east-1"}}'
+  DYNAMODB_TABLE_NAME: '{{.DYNAMODB_TABLE_NAME | default "simple-inventory"}}'
+  STACK_NAME: '{{.STACK_NAME | default "dynamodb-for-go-developers"}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  deps:
+    desc: Download and tidy Go module dependencies (GOPROXY=direct)
+    cmds:
+      - go mod tidy
+
+  build:
+    desc: Compile the application into build/
+    deps: [deps]
+    cmds:
+      - mkdir -p build
+      - go build -o build/lgod .
+
+  vet:
+    desc: Run go vet
+    deps: [deps]
+    cmds:
+      - go vet ./...
+
+  fmt:
+    desc: Format all Go files
+    cmds:
+      - gofmt -w .
+
+  deploy:
+    desc: Provision the DynamoDB table via CloudFormation
+    cmds:
+      - aws cloudformation deploy --template-file template.yaml --stack-name {{.STACK_NAME}}
+
+  wait-active:
+    desc: Wait until the table is ACTIVE
+    cmds:
+      - aws dynamodb describe-table --table-name {{.DYNAMODB_TABLE_NAME}} --query "Table.TableStatus"
+
+  load-data:
+    desc: Bulk-load the sample dataset
+    deps: [build]
+    cmds:
+      - ./build/lgod load-data
+
+  demo:
+    desc: Run the full read/query/update/transaction walkthrough
+    deps: [build]
+    cmds:
+      - ./build/lgod demo
+
+  run:
+    desc: Deploy, load data, and run the demo end to end
+    cmds:
+      - task: deploy
+      - task: load-data
+      - task: demo
+
+  clean:
+    desc: Delete the CloudFormation stack (tears down the table)
+    cmds:
+      - aws cloudformation delete-stack --stack-name {{.STACK_NAME}}
+      - aws cloudformation wait stack-delete-complete --stack-name {{.STACK_NAME}}
