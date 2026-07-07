@@ -7,7 +7,7 @@ This is the complete, runnable reference solution for the **LGOD: DynamoDB for G
 | DynamoDB operation | Where |
 |--------------------|-------|
 | `PutItem` | `repository.go` — `CreateUser`, `CreateOrder`, `CreateOrderItem` |
-| `BatchWriteItem` | `repository.go` — `BatchWriteItems` |
+| `BatchWriteItem` | `repository.go` — `BatchWriteItems`, `SeedData` |
 | `GetItem` | `repository.go` — `GetUser` |
 | `Query` (primary table) | `GetOrdersByUserID`, `GetOrderItems` |
 | `Query` (inverted-index GSI) | `GetOrderByID` |
@@ -18,6 +18,8 @@ This is the complete, runnable reference solution for the **LGOD: DynamoDB for G
 | `DeleteItem` | `DeleteOrderItem` |
 | `TransactWriteItems` | `PlaceOrder` |
 | `Scan` | `ScanAllItems` |
+
+All write paths marshal the model structs (`User`, `Order`, `OrderItem`) with `attributevalue.MarshalMap` via shared helpers in `repository.go`, then add the single-table `pk`/`sk` and derived index attributes — so no hand-written attribute maps are needed anywhere.
 
 ## Prerequisites
 
@@ -47,7 +49,7 @@ aws dynamodb describe-table --table-name simple-inventory --query "Table.TableSt
 go run . load-data
 ```
 
-This bulk-loads three users, six orders (in various states), and six order items using `BatchWriteItem`.
+This builds three users, six orders (in various states), and six order items as typed model objects and bulk-loads them with `BatchWriteItem` (see `SeedData` in `repository.go`).
 
 ## 3. Run the demo
 
@@ -81,8 +83,9 @@ aws cloudformation wait stack-delete-complete --stack-name dynamodb-for-go-devel
 .
 ├── template.yaml    # CloudFormation: table + GSIs + LSI (control plane)
 ├── models.go        # Entity structs (User, Order, OrderItem)
-├── repository.go    # All DynamoDB data-plane operations
-├── main.go          # CLI entry point (load-data, demo)
+├── repository.go    # All DynamoDB data-plane operations + marshaling helpers
+├── demo.go          # Sample dataset (typed models) and the demo walkthrough
+├── main.go          # CLI entry point: config, client, subcommand dispatch
 ├── go.mod
 └── go.sum
 ```

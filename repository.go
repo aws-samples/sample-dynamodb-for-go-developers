@@ -25,59 +25,83 @@ func NewRepository(client *dynamodb.Client, tableName string) *Repository {
 	}
 }
 
+// ---------- Marshaling ----------
+//
+// These helpers turn a model struct into a DynamoDB item map: they let
+// attributevalue.MarshalMap handle the struct fields, then add the
+// single-table pk/sk and any derived index attributes. CreateXxx and SeedData
+// share them so key construction lives in exactly one place.
+
+func marshalUser(user User) (map[string]types.AttributeValue, error) {
+	item, err := attributevalue.MarshalMap(user)
+	if err != nil {
+		return nil, err
+	}
+	item["pk"] = &types.AttributeValueMemberS{Value: fmt.Sprintf("#USER#%s", user.Username)}
+	item["sk"] = &types.AttributeValueMemberS{Value: "PROFILE"}
+	return item, nil
+}
+
+func marshalOrder(order Order) (map[string]types.AttributeValue, error) {
+	item, err := attributevalue.MarshalMap(order)
+	if err != nil {
+		return nil, err
+	}
+	item["pk"] = &types.AttributeValueMemberS{Value: fmt.Sprintf("#USER#%s", order.UserID)}
+	item["sk"] = &types.AttributeValueMemberS{Value: fmt.Sprintf("#ORDER#%s", order.ID)}
+	item["status_date"] = &types.AttributeValueMemberS{Value: fmt.Sprintf("%s#%s", order.Status, order.CreatedAt.Format("2006-01-02"))}
+
+	// placed_id is only present for active orders, which is what makes the placed-index sparse.
+	if order.Status == OrderStatusPending || order.Status == OrderStatusConfirmed {
+		item["placed_id"] = &types.AttributeValueMemberS{Value: string(order.Status)}
+	}
+	return item, nil
+}
+
+func marshalOrderItem(orderID string, orderItem OrderItem) (map[string]types.AttributeValue, error) {
+	item, err := attributevalue.MarshalMap(orderItem)
+	if err != nil {
+		return nil, err
+	}
+	item["pk"] = &types.AttributeValueMemberS{Value: fmt.Sprintf("#ORDER#%s", orderID)}
+	item["sk"] = &types.AttributeValueMemberS{Value: fmt.Sprintf("#ITEM#%s", orderItem.ItemID)}
+	return item, nil
+}
+
 // ---------- Write operations ----------
 
 func (r *Repository) CreateUser(ctx context.Context, user User) error {
-	userMap, err := attributevalue.MarshalMap(user)
+	item, err := marshalUser(user)
 	if err != nil {
 		return err
 	}
-
-	userMap["pk"] = &types.AttributeValueMemberS{Value: fmt.Sprintf("#USER#%s", user.Username)}
-	userMap["sk"] = &types.AttributeValueMemberS{Value: "PROFILE"}
-
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(r.tableName),
-		Item:      userMap,
+		Item:      item,
 	})
 	return err
 }
 
 func (r *Repository) CreateOrder(ctx context.Context, order *Order) error {
-	orderMap, err := attributevalue.MarshalMap(order)
+	item, err := marshalOrder(*order)
 	if err != nil {
 		return err
 	}
-
-	orderMap["pk"] = &types.AttributeValueMemberS{Value: fmt.Sprintf("#USER#%s", order.UserID)}
-	orderMap["sk"] = &types.AttributeValueMemberS{Value: fmt.Sprintf("#ORDER#%s", order.ID)}
-
-	statusDate := fmt.Sprintf("%s#%s", order.Status, order.CreatedAt.Format("2006-01-02"))
-	orderMap["status_date"] = &types.AttributeValueMemberS{Value: statusDate}
-
-	if order.Status == OrderStatusPending || order.Status == OrderStatusConfirmed {
-		orderMap["placed_id"] = &types.AttributeValueMemberS{Value: string(order.Status)}
-	}
-
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(r.tableName),
-		Item:      orderMap,
+		Item:      item,
 	})
 	return err
 }
 
-func (r *Repository) CreateOrderItem(ctx context.Context, orderID string, item *OrderItem) error {
-	itemMap, err := attributevalue.MarshalMap(item)
+func (r *Repository) CreateOrderItem(ctx context.Context, orderID string, orderItem *OrderItem) error {
+	item, err := marshalOrderItem(orderID, *orderItem)
 	if err != nil {
 		return err
 	}
-
-	itemMap["pk"] = &types.AttributeValueMemberS{Value: fmt.Sprintf("#ORDER#%s", orderID)}
-	itemMap["sk"] = &types.AttributeValueMemberS{Value: fmt.Sprintf("#ITEM#%s", item.ItemID)}
-
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(r.tableName),
-		Item:      itemMap,
+		Item:      item,
 	})
 	return err
 }
@@ -116,6 +140,37 @@ func (r *Repository) BatchWriteItems(ctx context.Context, items []map[string]typ
 		}
 	}
 	return nil
+}
+
+// SeedData marshals typed model objects and bulk-loads them with BatchWriteItems.
+// It uses the same marshaling helpers as CreateUser/CreateOrder/CreateOrderItem,
+// so the sample dataset is built from models rather than hand-written attribute maps.
+func (r *Repository) SeedData(ctx context.Context, users []User, orders []Order, orderItems []OrderItem) error {
+	var items []map[string]types.AttributeValue
+
+	for _, u := range users {
+		item, err := marshalUser(u)
+		if err != nil {
+			return err
+		}
+		items = append(items, item)
+	}
+	for _, o := range orders {
+		item, err := marshalOrder(o)
+		if err != nil {
+			return err
+		}
+		items = append(items, item)
+	}
+	for _, oi := range orderItems {
+		item, err := marshalOrderItem(oi.OrderID, oi)
+		if err != nil {
+			return err
+		}
+		items = append(items, item)
+	}
+
+	return r.BatchWriteItems(ctx, items)
 }
 
 // ---------- Read operations ----------
@@ -306,7 +361,10 @@ func (r *Repository) UpdateOrderStatus(ctx context.Context, orderID string, newS
 
 	statusDate := fmt.Sprintf("%s#%s", newStatus, time.Now().Format("2006-01-02"))
 
-	updateExpr := "SET #status = :status, #status_date = :status_date, #updated_at = :updated_at"
+	// An UpdateExpression may use each keyword (SET/REMOVE) only once, so the
+	// placed_id change is folded into the same SET or REMOVE clause rather than
+	// appended as a second SET.
+	setExpr := "SET #status = :status, #status_date = :status_date, #updated_at = :updated_at"
 	exprNames := map[string]string{
 		"#status":      "status",
 		"#status_date": "status_date",
@@ -318,13 +376,17 @@ func (r *Repository) UpdateOrderStatus(ctx context.Context, orderID string, newS
 		":updated_at":  &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
 	}
 
+	var updateExpr string
 	if newStatus == OrderStatusPending || newStatus == OrderStatusConfirmed {
-		updateExpr += " SET #placed_id = :placed_id"
+		// Active order: set placed_id so it appears in the sparse placed-index.
+		setExpr += ", #placed_id = :placed_id"
 		exprNames["#placed_id"] = "placed_id"
 		exprValues[":placed_id"] = &types.AttributeValueMemberS{Value: string(newStatus)}
+		updateExpr = setExpr
 	} else {
-		updateExpr += " REMOVE #placed_id"
+		// Inactive order: drop placed_id so it falls out of the sparse index.
 		exprNames["#placed_id"] = "placed_id"
+		updateExpr = setExpr + " REMOVE #placed_id"
 	}
 
 	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{

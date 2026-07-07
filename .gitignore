@@ -11,3 +11,6 @@ go.work.sum
 
 # Local env
 .env
+
+# Threat model output
+.threatmodel/
