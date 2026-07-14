@@ -106,6 +106,10 @@ Indexes:
 - **status-date-index** (LSI): `pk`, `status_date` — a user's orders by status/date using a concatenated key
 - **status-date-gsi** (GSI, multi-attribute): `pk`, `status`, `created_at` — the same access pattern using multi-attribute keys instead of a concatenated string
 
+## Security
+
+See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
+
 ## License
 
 This library is licensed under the MIT-0 License. See the [LICENSE](LICENSE) file.
