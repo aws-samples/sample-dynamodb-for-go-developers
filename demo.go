@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // loadData bulk-loads the sample dataset used by the demo.
@@ -133,7 +136,101 @@ func runDemo(ctx context.Context, repo *Repository) {
 	}
 	fmt.Printf("  order ord-aaa-001 now has %d item(s)\n", len(remaining))
 
+	runAdvancedDemo(ctx, repo)
+
 	fmt.Println("\nDemo complete.")
+}
+
+// runAdvancedDemo exercises the remaining patterns the workshop teaches:
+// conditional writes, pagination, filtered and parallel scans, cascade delete,
+// and transactional reads. It runs after the core walkthrough so it can rely on
+// the seeded data.
+func runAdvancedDemo(ctx context.Context, repo *Repository) {
+	fmt.Println("\n== PutItem (conditional): create a user only if absent ==")
+	newUser := User{Username: "dave", FullName: "Dave Miller", Email: "dave@example.com"}
+	if err := repo.CreateUserIfNotExists(ctx, newUser); err != nil {
+		var condErr *types.ConditionalCheckFailedException
+		if errors.As(err, &condErr) {
+			fmt.Println("  user 'dave' already exists — not overwritten")
+		} else {
+			log.Fatalf("CreateUserIfNotExists failed: %v", err)
+		}
+	} else {
+		fmt.Println("  created user 'dave'")
+	}
+
+	fmt.Println("\n== Query (paginated): all of alice's orders, 2 per page ==")
+	paged, err := repo.GetAllOrdersPaginated(ctx, "alice", 2)
+	if err != nil {
+		log.Fatalf("GetAllOrdersPaginated failed: %v", err)
+	}
+	fmt.Printf("  retrieved %d orders across pages\n", len(paged))
+
+	fmt.Println("\n== UpdateItem (conditional): ship a confirmed order ==")
+	// ord-aaa-002 is seeded as confirmed, so this conditional ship succeeds.
+	if err := repo.ShipOrder(ctx, "ord-aaa-002"); err != nil {
+		var condErr *types.ConditionalCheckFailedException
+		if errors.As(err, &condErr) {
+			fmt.Println("  REJECTED: order was not in 'confirmed' status")
+		} else {
+			log.Fatalf("ShipOrder failed: %v", err)
+		}
+	} else {
+		fmt.Println("  ord-aaa-002 shipped (was confirmed)")
+	}
+
+	fmt.Println("\n== UpdateItem (conditional): try to ship a pending order (expect rejection) ==")
+	// ord-bbb-001 is pending, so the confirmed-only condition fails.
+	err = repo.ShipOrder(ctx, "ord-bbb-001")
+	var condErr *types.ConditionalCheckFailedException
+	if errors.As(err, &condErr) {
+		fmt.Println("  REJECTED as expected: order is not 'confirmed'")
+	} else if err != nil {
+		log.Fatalf("ShipOrder failed unexpectedly: %v", err)
+	} else {
+		fmt.Println("  (unexpectedly shipped)")
+	}
+
+	fmt.Println("\n== Scan (filtered): all pending orders across the table ==")
+	pendingScan, err := repo.ScanOrdersByStatus(ctx, OrderStatusPending)
+	if err != nil {
+		log.Fatalf("ScanOrdersByStatus failed: %v", err)
+	}
+	fmt.Printf("  %d pending order items matched the filter\n", len(pendingScan))
+
+	fmt.Println("\n== Scan (parallel): full table with 4 segments ==")
+	parallelItems, err := repo.ParallelScan(ctx, 4)
+	if err != nil {
+		log.Fatalf("ParallelScan failed: %v", err)
+	}
+	fmt.Printf("  %d items read across 4 segments\n", len(parallelItems))
+
+	fmt.Println("\n== TransactGetItems: consistent snapshot of an order + its items ==")
+	snapOrder, snapItems, err := repo.GetOrderSnapshot(ctx, "bob", "ord-bbb-001")
+	if err != nil {
+		log.Fatalf("GetOrderSnapshot failed: %v", err)
+	}
+	fmt.Printf("  order %s (status=%s) with %d item(s)\n", snapOrder.ID, snapOrder.Status, len(snapItems))
+
+	fmt.Println("\n== DeleteItem (cascade): delete an order and all its items ==")
+	// carol's ord-ccc-001 and its single item are removed together.
+	if err := repo.DeleteOrderWithItems(ctx, "ord-ccc-001"); err != nil {
+		log.Fatalf("DeleteOrderWithItems failed: %v", err)
+	}
+	fmt.Println("  deleted ord-ccc-001 and its items")
+
+	fmt.Println("\n== DeleteItem (conditional): cancel a pending order ==")
+	// bob's ord-bbb-001 is still pending, so the pending-only cancel succeeds.
+	if err := repo.CancelOrder(ctx, "ord-bbb-001"); err != nil {
+		var cErr *types.ConditionalCheckFailedException
+		if errors.As(err, &cErr) {
+			fmt.Println("  REJECTED: order was not 'pending'")
+		} else {
+			log.Fatalf("CancelOrder failed: %v", err)
+		}
+	} else {
+		fmt.Println("  cancelled ord-bbb-001 (was pending)")
+	}
 }
 
 // orderDate builds a fixed timestamp (10:00 UTC on the given day) so the demo's

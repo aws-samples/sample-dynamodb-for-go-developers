@@ -26,17 +26,25 @@ import (
 //   Concept                         Worked example        You implement
 //   ------------------------------  --------------------  --------------------
 //   PutItem + marshaling            CreateUser            CreateOrder, CreateOrderItem
+//   PutItem (conditional)           —                     CreateUserIfNotExists
 //   BatchWriteItem (bulk load)      —                     BatchWriteItems, SeedData
 //   GetItem                         GetUser               —
 //   Query (base table)             GetOrdersByUserID     GetOrderItems
+//   Query (paginated)               —                     GetAllOrdersPaginated
 //   Query (inverted-index GSI)      —                     GetOrderByID
 //   Query (sparse placed-index)     —                     GetPendingOrders
 //   Query (status-date-index LSI)   —                     GetUserOrdersByStatus
 //   Query (status-date-gsi)         —                     GetUserOrdersByStatusGSI
 //   Scan                            —                     ScanAllItems
+//   Scan (filtered)                 —                     ScanOrdersByStatus
+//   Scan (parallel)                 —                     ParallelScan
 //   UpdateItem                      —                     UpdateOrderStatus
+//   UpdateItem (conditional)        —                     ShipOrder
 //   DeleteItem                      —                     DeleteOrderItem
+//   DeleteItem (conditional)        —                     CancelOrder
+//   DeleteItem (cascade)            —                     DeleteOrderWithItems
 //   TransactWriteItems              —                     PlaceOrder
+//   TransactGetItems                —                     GetOrderSnapshot
 //
 // Every stub currently returns errNotImplemented so the package compiles and
 // `go run . demo` runs from the first checkout — it prints exactly which
@@ -117,6 +125,15 @@ func (r *Repository) CreateUser(ctx context.Context, user User) error {
 	return err
 }
 
+// CreateUserIfNotExists should write a user only when no profile already exists.
+func (r *Repository) CreateUserIfNotExists(ctx context.Context, user User) error {
+	// TODO(lab): Like CreateUser, but add a ConditionExpression of
+	// "attribute_not_exists(pk)" to the PutItemInput so an existing user is not
+	// silently overwritten. A duplicate write fails with
+	// *types.ConditionalCheckFailedException (catch it with errors.As).
+	return errNotImplemented("CreateUserIfNotExists")
+}
+
 func (r *Repository) CreateOrder(ctx context.Context, order *Order) error {
 	// TODO(lab): Marshal *order with marshalOrder, then PutItem it into the
 	// table. Mirror CreateUser.
@@ -195,6 +212,18 @@ func (r *Repository) GetOrdersByUserID(ctx context.Context, userID string) ([]*O
 	return unmarshalOrders(result.Items, userID), nil
 }
 
+// GetAllOrdersPaginated should page through a user's orders explicitly.
+func (r *Repository) GetAllOrdersPaginated(ctx context.Context, userID string, pageSize int32) ([]*Order, error) {
+	// TODO(lab): Run the same base-table Query as GetOrdersByUserID, but in a
+	// loop that walks every page:
+	//   - Set Limit to pageSize.
+	//   - After each Query, append unmarshalOrders(result.Items, userID) to your
+	//     accumulator.
+	//   - If result.LastEvaluatedKey is non-nil, set it as the next request's
+	//     ExclusiveStartKey and continue; otherwise stop.
+	return nil, errNotImplemented("GetAllOrdersPaginated")
+}
+
 func (r *Repository) GetOrderItems(ctx context.Context, orderID string) ([]OrderItem, error) {
 	// TODO(lab): Query the base table for every item belonging to an order.
 	// Mirror GetOrdersByUserID, but:
@@ -263,6 +292,28 @@ func (r *Repository) ScanAllItems(ctx context.Context) ([]map[string]types.Attri
 	return nil, errNotImplemented("ScanAllItems")
 }
 
+// ScanOrdersByStatus should scan the table with a filter expression.
+func (r *Repository) ScanOrdersByStatus(ctx context.Context, status OrderStatus) ([]map[string]types.AttributeValue, error) {
+	// TODO(lab): Like ScanAllItems, but give the ScanInput a FilterExpression of
+	// "#status = :status AND begins_with(sk, :order_prefix)" with
+	//   ExpressionAttributeNames  {"#status": "status"}  ("status" is reserved)
+	//   :status       = string(status)
+	//   :order_prefix = "#ORDER#"
+	// Remember: the filter shrinks the RESULT, not the data DynamoDB reads or
+	// charges for. Collect page.Items across all pages.
+	return nil, errNotImplemented("ScanOrdersByStatus")
+}
+
+// ParallelScan should scan the table concurrently across totalSegments workers.
+func (r *Repository) ParallelScan(ctx context.Context, totalSegments int) ([]map[string]types.AttributeValue, error) {
+	// TODO(lab): Launch totalSegments goroutines. Each builds its own
+	// ScanPaginator with ScanInput.Segment = its index and
+	// ScanInput.TotalSegments = totalSegments, drains all its pages, and sends
+	// its items (or an error) back on a channel. The caller collects results
+	// from the channel — return the first error, otherwise the combined items.
+	return nil, errNotImplemented("ParallelScan")
+}
+
 // ---------- Update operations ----------
 
 func (r *Repository) UpdateOrderStatus(ctx context.Context, orderID string, newStatus OrderStatus) error {
@@ -282,6 +333,18 @@ func (r *Repository) UpdateOrderStatus(ctx context.Context, orderID string, newS
 	return errNotImplemented("UpdateOrderStatus")
 }
 
+// ShipOrder should mark an order shipped only if it is currently confirmed.
+func (r *Repository) ShipOrder(ctx context.Context, orderID string) error {
+	// TODO(lab): Look up the order (r.GetOrderByID) for its UserID, then
+	// UpdateItem with:
+	//   UpdateExpression    "SET #status = :new_status, #status_date = :status_date REMOVE #placed_id"
+	//   ConditionExpression "#status = :expected_status"   (:expected_status = "confirmed")
+	// so the write is rejected unless the order is confirmed. Alias status,
+	// status_date, and placed_id via ExpressionAttributeNames. A rejection
+	// surfaces as *types.ConditionalCheckFailedException (handle with errors.As).
+	return errNotImplemented("ShipOrder")
+}
+
 // ---------- Delete operations ----------
 
 func (r *Repository) DeleteOrderItem(ctx context.Context, orderID, itemID string) error {
@@ -290,6 +353,27 @@ func (r *Repository) DeleteOrderItem(ctx context.Context, orderID, itemID string
 	//   sk = "#ITEM#<itemID>"
 	// DeleteItem is idempotent — deleting a missing item is not an error.
 	return errNotImplemented("DeleteOrderItem")
+}
+
+// CancelOrder should delete an order only while it is still pending.
+func (r *Repository) CancelOrder(ctx context.Context, orderID string) error {
+	// TODO(lab): Look up the order (r.GetOrderByID) for its UserID, then
+	// DeleteItem keyed by pk="#USER#<UserID>", sk="#ORDER#<orderID>" with a
+	// ConditionExpression "#status = :expected" (:expected = OrderStatusPending)
+	// so only pending orders can be cancelled. Set ReturnValues =
+	// types.ReturnValueAllOld to get the deleted attributes back.
+	return errNotImplemented("CancelOrder")
+}
+
+// DeleteOrderWithItems should delete an order and all of its items. DynamoDB
+// has no cascade delete, so you must remove the related items yourself.
+func (r *Repository) DeleteOrderWithItems(ctx context.Context, orderID string) error {
+	// TODO(lab): First r.GetOrderItems(orderID) and r.DeleteOrderItem for each
+	// one, then r.GetOrderByID to learn the UserID and DeleteItem the order
+	// itself (pk="#USER#<UserID>", sk="#ORDER#<orderID>"). Note this is NOT
+	// atomic — a crash mid-loop leaves partial state; the transactions module
+	// shows the atomic alternative.
+	return errNotImplemented("DeleteOrderWithItems")
 }
 
 // ---------- Transactions ----------
@@ -309,6 +393,19 @@ func (r *Repository) PlaceOrder(ctx context.Context, order *Order, items []Order
 	//       price as N, quantity as N).
 	// Then call r.client.TransactWriteItems with those TransactItems.
 	return errNotImplemented("PlaceOrder")
+}
+
+// GetOrderSnapshot should read an order and all its items as one consistent
+// snapshot using TransactGetItems.
+func (r *Repository) GetOrderSnapshot(ctx context.Context, userID, orderID string) (*Order, []OrderItem, error) {
+	// TODO(lab): First r.GetOrderItems(orderID) so you know which item keys to
+	// read. Build a []types.TransactGetItem whose first Get is the order
+	// (pk="#USER#<userID>", sk="#ORDER#<orderID>") followed by one Get per item
+	// (pk="#ORDER#<orderID>", sk="#ITEM#<ItemID>"). Call
+	// r.client.TransactGetItems; responses come back in request order, so
+	// result.Responses[0] is the order and the rest are items. Unmarshal each
+	// (stamp order.UserID/order.ID) and return them.
+	return nil, nil, errNotImplemented("GetOrderSnapshot")
 }
 
 // ---------- Helpers ----------
