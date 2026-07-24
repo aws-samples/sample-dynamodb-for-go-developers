@@ -30,7 +30,7 @@ pattern to follow. The rest are yours to write:
 |---------|---------------------------|------------------------------|
 | `PutItem` + marshaling | `marshalUser`, `CreateUser` | `marshalOrder`, `marshalOrderItem`, `CreateOrder`, `CreateOrderItem` |
 | `PutItem` (conditional) | — | `CreateUserIfNotExists` |
-| `BatchWriteItem` (bulk load) | — | `BatchWriteItems`, `SeedData` |
+| `BatchWriteItem` (bulk load) | `SeedData` | `BatchWriteItems` |
 | `GetItem` | `GetUser` | — |
 | `Query` (base table) | `GetOrdersByUserID` | `GetOrderItems` |
 | `Query` (paginated) | — | `GetAllOrdersPaginated` |
@@ -110,8 +110,9 @@ go run . load-data
 This builds three users, six orders (in various states), and six order items as typed model objects and bulk-loads them with `BatchWriteItem` (see `SeedData` in `repository.go`).
 
 > On the `lab` branch this fails with a `TODO(lab)` error until you implement
-> `marshalOrder`, `marshalOrderItem`, `BatchWriteItems`, and `SeedData`. That is
-> expected — the message tells you which function to fill in next.
+> `marshalOrder`, `marshalOrderItem`, and `BatchWriteItems`. That is expected —
+> the message tells you which function to fill in next. (`SeedData` is already
+> provided; it just marshals the models and calls `BatchWriteItems`.)
 
 ## 3. Run the demo
 

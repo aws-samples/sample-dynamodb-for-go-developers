@@ -27,7 +27,7 @@ import (
 //   ------------------------------  --------------------  --------------------
 //   PutItem + marshaling            CreateUser            CreateOrder, CreateOrderItem
 //   PutItem (conditional)           —                     CreateUserIfNotExists
-//   BatchWriteItem (bulk load)      —                     BatchWriteItems, SeedData
+//   BatchWriteItem (bulk load)      SeedData              BatchWriteItems
 //   GetItem                         GetUser               —
 //   Query (base table)             GetOrdersByUserID     GetOrderItems
 //   Query (paginated)               —                     GetAllOrdersPaginated
@@ -155,14 +155,36 @@ func (r *Repository) BatchWriteItems(ctx context.Context, items []map[string]typ
 	return errNotImplemented("BatchWriteItems")
 }
 
-// SeedData marshals typed model objects and bulk-loads them with BatchWriteItems.
-// It uses the same marshaling helpers as CreateUser/CreateOrder/CreateOrderItem,
-// so the sample dataset is built from models rather than hand-written attribute maps.
+// SeedData is PROVIDED for you. It is plain Go plumbing, not a DynamoDB concept:
+// it marshals every typed model with the shared helpers and hands the combined
+// slice to BatchWriteItems (the function you implement). Once your marshalXxx
+// helpers and BatchWriteItems are done, `go run . load-data` uses this as-is.
 func (r *Repository) SeedData(ctx context.Context, users []User, orders []Order, orderItems []OrderItem) error {
-	// TODO(lab): Build one []map[string]types.AttributeValue by marshaling every
-	// user (marshalUser), order (marshalOrder), and order item (marshalOrderItem),
-	// then hand the combined slice to r.BatchWriteItems.
-	return errNotImplemented("SeedData")
+	var items []map[string]types.AttributeValue
+
+	for _, u := range users {
+		item, err := marshalUser(u)
+		if err != nil {
+			return err
+		}
+		items = append(items, item)
+	}
+	for _, o := range orders {
+		item, err := marshalOrder(o)
+		if err != nil {
+			return err
+		}
+		items = append(items, item)
+	}
+	for _, oi := range orderItems {
+		item, err := marshalOrderItem(oi.OrderID, oi)
+		if err != nil {
+			return err
+		}
+		items = append(items, item)
+	}
+
+	return r.BatchWriteItems(ctx, items)
 }
 
 // ---------- Read operations ----------
