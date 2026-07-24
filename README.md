@@ -1,8 +1,50 @@
-# DynamoDB for Go Developers 
+# DynamoDB for Go Developers — Lab Branch
 
-This is the complete, runnable reference solution for the **LGOD: DynamoDB for Go Developers** workshop. It demonstrates every DynamoDB access pattern the workshop teaches, using the AWS SDK for Go v2.
+> **This is the `lab` branch: a fill-in-the-blanks worksheet.**
+> `repository.go` ships with the DynamoDB data-plane operations left as
+> `TODO(lab)` stubs for you to implement as you work through the
+> **LGOD: DynamoDB for Go Developers** workshop instructions. The complete,
+> runnable reference solution lives on the **`main`** branch
+> (`git switch main`).
 
-## What it demonstrates
+## How the lab works
+
+1. **Pull this branch.** Everything except the DynamoDB operations in
+   `repository.go` is provided and working: the models, the CLI entry point,
+   the demo/seed harness, the CloudFormation template, and the Taskfile.
+2. **Fill in the sections.** Each function to implement is marked with a
+   `// TODO(lab):` comment describing exactly what to do and which worked
+   example to mirror. Follow the workshop instructions module by module.
+3. **Watch the placeholders clear.** Every unimplemented function returns an
+   `errNotImplemented("<name>")` error, so the project compiles and runs from
+   the first checkout. `go run . demo` prints exactly which patterns are still
+   unimplemented — a live progress checklist. Delete the `errNotImplemented`
+   return as you complete each function.
+
+### Worked examples vs. what you implement
+
+`repository.go` keeps one **worked example per concept** so you always have a
+pattern to follow. The rest are yours to write:
+
+| Concept | Worked example (provided) | You implement (`TODO(lab)`) |
+|---------|---------------------------|------------------------------|
+| `PutItem` + marshaling | `marshalUser`, `CreateUser` | `marshalOrder`, `marshalOrderItem`, `CreateOrder`, `CreateOrderItem` |
+| `BatchWriteItem` (bulk load) | — | `BatchWriteItems`, `SeedData` |
+| `GetItem` | `GetUser` | — |
+| `Query` (base table) | `GetOrdersByUserID` | `GetOrderItems` |
+| `Query` (inverted-index GSI) | — | `GetOrderByID` |
+| `Query` (placed-index sparse GSI) | — | `GetPendingOrders` |
+| `Query` (status-date-index LSI) | — | `GetUserOrdersByStatus` |
+| `Query` (status-date-gsi multi-attribute GSI) | — | `GetUserOrdersByStatusGSI` |
+| `Scan` | — | `ScanAllItems` |
+| `UpdateItem` | — | `UpdateOrderStatus` |
+| `DeleteItem` | — | `DeleteOrderItem` |
+| `TransactWriteItems` | — | `PlaceOrder` |
+
+> **Stuck?** Compare against the reference: `git show main:repository.go`
+> (or `git switch main` to browse the whole solution, then `git switch lab`).
+
+## What the finished solution demonstrates
 
 | DynamoDB operation | Where |
 |--------------------|-------|
@@ -51,6 +93,10 @@ go run . load-data
 
 This builds three users, six orders (in various states), and six order items as typed model objects and bulk-loads them with `BatchWriteItem` (see `SeedData` in `repository.go`).
 
+> On the `lab` branch this fails with a `TODO(lab)` error until you implement
+> `marshalOrder`, `marshalOrderItem`, `BatchWriteItems`, and `SeedData`. That is
+> expected — the message tells you which function to fill in next.
+
 ## 3. Run the demo
 
 ```bash
@@ -58,6 +104,11 @@ go run .
 ```
 
 This exercises every read, query, update, transaction, and scan pattern against the loaded data and prints the results.
+
+> On the `lab` branch the demo stops at the first unimplemented function. Work
+> through the workshop modules in order; each function you complete lets the
+> demo progress one step further, so the demo doubles as your progress
+> checklist.
 
 ## Configuration
 
@@ -83,7 +134,7 @@ aws cloudformation wait stack-delete-complete --stack-name dynamodb-for-go-devel
 .
 ├── template.yaml    # CloudFormation: table + GSIs + LSI (control plane)
 ├── models.go        # Entity structs (User, Order, OrderItem)
-├── repository.go    # All DynamoDB data-plane operations + marshaling helpers
+├── repository.go    # DynamoDB data-plane operations — worked examples + TODO(lab) stubs
 ├── demo.go          # Sample dataset (typed models) and the demo walkthrough
 ├── main.go          # CLI entry point: config, client, subcommand dispatch
 ├── go.mod
