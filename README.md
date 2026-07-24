@@ -7,17 +7,25 @@ This is the complete, runnable reference solution for the **LGOD: DynamoDB for G
 | DynamoDB operation | Where |
 |--------------------|-------|
 | `PutItem` | `repository.go` — `CreateUser`, `CreateOrder`, `CreateOrderItem` |
+| `PutItem` (conditional) | `CreateUserIfNotExists` |
 | `BatchWriteItem` | `repository.go` — `BatchWriteItems`, `SeedData` |
 | `GetItem` | `repository.go` — `GetUser` |
 | `Query` (primary table) | `GetOrdersByUserID`, `GetOrderItems` |
+| `Query` (paginated) | `GetAllOrdersPaginated` |
 | `Query` (inverted-index GSI) | `GetOrderByID` |
 | `Query` (placed-index sparse GSI) | `GetPendingOrders` |
 | `Query` (status-date-index LSI) | `GetUserOrdersByStatus` |
 | `Query` (status-date-gsi multi-attribute GSI) | `GetUserOrdersByStatusGSI` |
 | `UpdateItem` | `UpdateOrderStatus` |
+| `UpdateItem` (conditional) | `ShipOrder` |
 | `DeleteItem` | `DeleteOrderItem` |
+| `DeleteItem` (conditional) | `CancelOrder` |
+| `DeleteItem` (cascade) | `DeleteOrderWithItems` |
 | `TransactWriteItems` | `PlaceOrder` |
+| `TransactGetItems` | `GetOrderSnapshot` |
 | `Scan` | `ScanAllItems` |
+| `Scan` (filtered) | `ScanOrdersByStatus` |
+| `Scan` (parallel) | `ParallelScan` |
 
 All write paths marshal the model structs (`User`, `Order`, `OrderItem`) with `attributevalue.MarshalMap` via shared helpers in `repository.go`, then add the single-table `pk`/`sk` and derived index attributes — so no hand-written attribute maps are needed anywhere.
 
