@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -38,12 +39,12 @@ import (
 //   Scan                            —                     ScanAllItems
 //   Scan (filtered)                 —                     ScanOrdersByStatus
 //   Scan (parallel)                 —                     ParallelScan
-//   UpdateItem                      —                     UpdateOrderStatus
+//   UpdateItem                      UpdateOrderStatus     —
 //   UpdateItem (conditional)        —                     ShipOrder
-//   DeleteItem                      —                     DeleteOrderItem
+//   DeleteItem                      DeleteOrderItem       —
 //   DeleteItem (conditional)        —                     CancelOrder
 //   DeleteItem (cascade)            —                     DeleteOrderWithItems
-//   TransactWriteItems              —                     PlaceOrder
+//   TransactWriteItems              PlaceOrder            —
 //   TransactGetItems                —                     GetOrderSnapshot
 //
 // Every stub currently returns errNotImplemented so the package compiles and
@@ -338,21 +339,57 @@ func (r *Repository) ParallelScan(ctx context.Context, totalSegments int) ([]map
 
 // ---------- Update operations ----------
 
+// UpdateOrderStatus is a WORKED EXAMPLE of UpdateItem. It shows the core update
+// pattern: an UpdateExpression with a SET clause, ExpressionAttributeNames to
+// alias the reserved word "status", and REMOVE to drop the sparse-index
+// attribute. ShipOrder below adds a ConditionExpression on top of this shape.
 func (r *Repository) UpdateOrderStatus(ctx context.Context, orderID string, newStatus OrderStatus) error {
-	// TODO(lab): Change an order's status with UpdateItem, keeping the sparse
-	// index consistent.
-	//   1. Look up the order first (r.GetOrderByID) to learn its UserID for the key.
-	//   2. Build a SET clause for status, status_date ("<newStatus>#<today>"),
-	//      and updated_at. "status" is reserved — alias every name via
-	//      ExpressionAttributeNames.
-	//   3. If newStatus is pending or confirmed, fold "#placed_id = :placed_id"
-	//      into the SAME SET clause (an UpdateExpression may use SET only once).
-	//      Otherwise append " REMOVE #placed_id" so the order drops out of the
-	//      sparse placed-index.
-	//   4. UpdateItem with Key pk="#USER#<UserID>", sk="#ORDER#<orderID>".
-	// (Add the "time" import: time.Now().Format("2006-01-02") for status_date
-	// and time.RFC3339 for updated_at are handy here.)
-	return errNotImplemented("UpdateOrderStatus")
+	order, err := r.GetOrderByID(ctx, orderID)
+	if err != nil {
+		return err
+	}
+
+	statusDate := fmt.Sprintf("%s#%s", newStatus, time.Now().Format("2006-01-02"))
+
+	// An UpdateExpression may use each keyword (SET/REMOVE) only once, so the
+	// placed_id change is folded into the same SET or REMOVE clause rather than
+	// appended as a second SET.
+	setExpr := "SET #status = :status, #status_date = :status_date, #updated_at = :updated_at"
+	exprNames := map[string]string{
+		"#status":      "status",
+		"#status_date": "status_date",
+		"#updated_at":  "updated_at",
+	}
+	exprValues := map[string]types.AttributeValue{
+		":status":      &types.AttributeValueMemberS{Value: string(newStatus)},
+		":status_date": &types.AttributeValueMemberS{Value: statusDate},
+		":updated_at":  &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
+	}
+
+	var updateExpr string
+	if newStatus == OrderStatusPending || newStatus == OrderStatusConfirmed {
+		// Active order: set placed_id so it appears in the sparse placed-index.
+		setExpr += ", #placed_id = :placed_id"
+		exprNames["#placed_id"] = "placed_id"
+		exprValues[":placed_id"] = &types.AttributeValueMemberS{Value: string(newStatus)}
+		updateExpr = setExpr
+	} else {
+		// Inactive order: drop placed_id so it falls out of the sparse index.
+		exprNames["#placed_id"] = "placed_id"
+		updateExpr = setExpr + " REMOVE #placed_id"
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: fmt.Sprintf("#USER#%s", order.UserID)},
+			"sk": &types.AttributeValueMemberS{Value: fmt.Sprintf("#ORDER#%s", orderID)},
+		},
+		UpdateExpression:          aws.String(updateExpr),
+		ExpressionAttributeNames:  exprNames,
+		ExpressionAttributeValues: exprValues,
+	})
+	return err
 }
 
 // ShipOrder should mark an order shipped only if it is currently confirmed.
@@ -369,12 +406,18 @@ func (r *Repository) ShipOrder(ctx context.Context, orderID string) error {
 
 // ---------- Delete operations ----------
 
+// DeleteOrderItem is a WORKED EXAMPLE of DeleteItem: a direct delete by full
+// primary key. CancelOrder and DeleteOrderWithItems below build on this shape
+// (a condition expression, and a cascade across related items).
 func (r *Repository) DeleteOrderItem(ctx context.Context, orderID, itemID string) error {
-	// TODO(lab): Delete a single order item with DeleteItem, keyed by
-	//   pk = "#ORDER#<orderID>"
-	//   sk = "#ITEM#<itemID>"
-	// DeleteItem is idempotent — deleting a missing item is not an error.
-	return errNotImplemented("DeleteOrderItem")
+	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: fmt.Sprintf("#ORDER#%s", orderID)},
+			"sk": &types.AttributeValueMemberS{Value: fmt.Sprintf("#ITEM#%s", itemID)},
+		},
+	})
+	return err
 }
 
 // CancelOrder should delete an order only while it is still pending.
@@ -400,21 +443,62 @@ func (r *Repository) DeleteOrderWithItems(ctx context.Context, orderID string) e
 
 // ---------- Transactions ----------
 
+// PlaceOrder is a WORKED EXAMPLE of TransactWriteItems: several writes that all
+// succeed or all fail. It combines a ConditionCheck (the user must exist) with
+// Put operations for the order and its items. GetOrderSnapshot below is the
+// read counterpart (TransactGetItems).
 func (r *Repository) PlaceOrder(ctx context.Context, order *Order, items []OrderItem) error {
-	// TODO(lab): Place an order atomically with TransactWriteItems — either
-	// everything below succeeds or nothing is written. Build a
-	// []types.TransactWriteItem containing:
-	//   1. A ConditionCheck that the user's PROFILE exists
-	//      (Key pk="#USER#<UserID>", sk="PROFILE",
-	//       ConditionExpression "attribute_exists(pk)").
-	//   2. A Put for the order item map (pk="#USER#<UserID>", sk="#ORDER#<ID>",
-	//      plus order_id, user_id, status, status_date, placed_id, address_key,
-	//      created_at, updated_at).
-	//   3. A Put for each element of `items`
-	//      (pk="#ORDER#<ID>", sk="#ITEM#<ItemID>", plus order_id, item_id, name,
-	//       price as N, quantity as N).
-	// Then call r.client.TransactWriteItems with those TransactItems.
-	return errNotImplemented("PlaceOrder")
+	var transactItems []types.TransactWriteItem
+
+	transactItems = append(transactItems, types.TransactWriteItem{
+		ConditionCheck: &types.ConditionCheck{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"pk": &types.AttributeValueMemberS{Value: fmt.Sprintf("#USER#%s", order.UserID)},
+				"sk": &types.AttributeValueMemberS{Value: "PROFILE"},
+			},
+			ConditionExpression: aws.String("attribute_exists(pk)"),
+		},
+	})
+
+	statusDate := fmt.Sprintf("%s#%s", order.Status, order.CreatedAt.Format("2006-01-02"))
+	orderItem := map[string]types.AttributeValue{
+		"pk":          &types.AttributeValueMemberS{Value: fmt.Sprintf("#USER#%s", order.UserID)},
+		"sk":          &types.AttributeValueMemberS{Value: fmt.Sprintf("#ORDER#%s", order.ID)},
+		"order_id":    &types.AttributeValueMemberS{Value: order.ID},
+		"user_id":     &types.AttributeValueMemberS{Value: order.UserID},
+		"status":      &types.AttributeValueMemberS{Value: string(order.Status)},
+		"status_date": &types.AttributeValueMemberS{Value: statusDate},
+		"placed_id":   &types.AttributeValueMemberS{Value: string(order.Status)},
+		"address_key": &types.AttributeValueMemberS{Value: order.AddressKey},
+		"created_at":  &types.AttributeValueMemberS{Value: order.CreatedAt.Format(time.RFC3339)},
+		"updated_at":  &types.AttributeValueMemberS{Value: order.UpdatedAt.Format(time.RFC3339)},
+	}
+	transactItems = append(transactItems, types.TransactWriteItem{
+		Put: &types.Put{TableName: aws.String(r.tableName), Item: orderItem},
+	})
+
+	for _, item := range items {
+		transactItems = append(transactItems, types.TransactWriteItem{
+			Put: &types.Put{
+				TableName: aws.String(r.tableName),
+				Item: map[string]types.AttributeValue{
+					"pk":       &types.AttributeValueMemberS{Value: fmt.Sprintf("#ORDER#%s", order.ID)},
+					"sk":       &types.AttributeValueMemberS{Value: fmt.Sprintf("#ITEM#%s", item.ItemID)},
+					"order_id": &types.AttributeValueMemberS{Value: order.ID},
+					"item_id":  &types.AttributeValueMemberS{Value: item.ItemID},
+					"name":     &types.AttributeValueMemberS{Value: item.Name},
+					"price":    &types.AttributeValueMemberN{Value: fmt.Sprintf("%.2f", item.Price)},
+					"quantity": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", item.Quantity)},
+				},
+			},
+		})
+	}
+
+	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: transactItems,
+	})
+	return err
 }
 
 // GetOrderSnapshot should read an order and all its items as one consistent

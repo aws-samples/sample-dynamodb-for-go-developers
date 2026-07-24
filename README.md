@@ -41,12 +41,12 @@ pattern to follow. The rest are yours to write:
 | `Scan` | — | `ScanAllItems` |
 | `Scan` (filtered) | — | `ScanOrdersByStatus` |
 | `Scan` (parallel) | — | `ParallelScan` |
-| `UpdateItem` | — | `UpdateOrderStatus` |
+| `UpdateItem` | `UpdateOrderStatus` | — |
 | `UpdateItem` (conditional) | — | `ShipOrder` |
-| `DeleteItem` | — | `DeleteOrderItem` |
+| `DeleteItem` | `DeleteOrderItem` | — |
 | `DeleteItem` (conditional) | — | `CancelOrder` |
 | `DeleteItem` (cascade) | — | `DeleteOrderWithItems` |
-| `TransactWriteItems` | — | `PlaceOrder` |
+| `TransactWriteItems` | `PlaceOrder` | — |
 | `TransactGetItems` | — | `GetOrderSnapshot` |
 
 > **Stuck?** Compare against the reference: `git show main:repository.go`
